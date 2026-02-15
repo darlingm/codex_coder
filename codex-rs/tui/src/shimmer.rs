@@ -59,6 +59,10 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     let base_color = default_fg().unwrap_or((128, 128, 128));
     let highlight_color = default_bg().unwrap_or((255, 255, 255));
     for (i, ch) in chars.iter().enumerate() {
+        if ch.is_whitespace() {
+            spans.push(ch.to_string().into());
+            continue;
+        }
         let i_pos = i as isize + SHIMMER_PADDING as isize;
         let pos = pos as isize;
         let dist = (i_pos - pos).abs() as f32;
