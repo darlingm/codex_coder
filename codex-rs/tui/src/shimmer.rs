@@ -12,10 +12,31 @@ use crate::terminal_palette::default_bg;
 use crate::terminal_palette::default_fg;
 
 static PROCESS_START: OnceLock<Instant> = OnceLock::new();
+const SHIMMER_PADDING: usize = 10;
+const SHIMMER_SWEEP_SECONDS: f64 = 2.0;
 
 fn elapsed_since_start() -> Duration {
     let start = PROCESS_START.get_or_init(Instant::now);
     start.elapsed()
+}
+
+fn shimmer_period(text: &str) -> Option<usize> {
+    let char_count = text.chars().count();
+    if char_count == 0 {
+        None
+    } else {
+        Some(char_count + SHIMMER_PADDING * 2)
+    }
+}
+
+pub(crate) fn next_shimmer_frame_delay(text: &str) -> Option<Duration> {
+    let period = shimmer_period(text)?;
+    let step_seconds = SHIMMER_SWEEP_SECONDS / period as f64;
+    let phase_seconds = elapsed_since_start().as_secs_f64() % SHIMMER_SWEEP_SECONDS;
+    let next_step = (phase_seconds / step_seconds).floor() + 1.0;
+    let next_phase_seconds = (next_step * step_seconds).min(SHIMMER_SWEEP_SECONDS);
+    let delay_seconds = (next_phase_seconds - phase_seconds).max(step_seconds);
+    Some(Duration::from_secs_f64(delay_seconds).max(Duration::from_millis(1)))
 }
 
 pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
@@ -24,11 +45,10 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
         return Vec::new();
     }
     // Use time-based sweep synchronized to process start.
-    let padding = 10usize;
-    let period = chars.len() + padding * 2;
-    let sweep_seconds = 2.0f32;
-    let pos_f =
-        (elapsed_since_start().as_secs_f32() % sweep_seconds) / sweep_seconds * (period as f32);
+    let period = chars.len() + SHIMMER_PADDING * 2;
+    let pos_f = (elapsed_since_start().as_secs_f32() % SHIMMER_SWEEP_SECONDS as f32)
+        / SHIMMER_SWEEP_SECONDS as f32
+        * (period as f32);
     let pos = pos_f as usize;
     let has_true_color = supports_color::on_cached(supports_color::Stream::Stdout)
         .map(|level| level.has_16m)
@@ -39,7 +59,7 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     let base_color = default_fg().unwrap_or((128, 128, 128));
     let highlight_color = default_bg().unwrap_or((255, 255, 255));
     for (i, ch) in chars.iter().enumerate() {
-        let i_pos = i as isize + padding as isize;
+        let i_pos = i as isize + SHIMMER_PADDING as isize;
         let pos = pos as isize;
         let dist = (i_pos - pos).abs() as f32;
 

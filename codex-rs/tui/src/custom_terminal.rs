@@ -530,12 +530,18 @@ where
                     diff.queue(writer)?;
                     modifier = cell.modifier;
                 }
-                if cell.fg != fg || cell.bg != bg {
+                if cell.fg != fg && cell.bg != bg {
                     queue!(
                         writer,
                         SetColors(Colors::new(cell.fg.into(), cell.bg.into()))
                     )?;
                     fg = cell.fg;
+                    bg = cell.bg;
+                } else if cell.fg != fg {
+                    queue!(writer, SetForegroundColor(cell.fg.into()))?;
+                    fg = cell.fg;
+                } else if cell.bg != bg {
+                    queue!(writer, SetBackgroundColor(cell.bg.into()))?;
                     bg = cell.bg;
                 }
 
@@ -551,8 +557,7 @@ where
                     if *peek_y != y || *peek_x != next_x {
                         break;
                     }
-                    if peek_cell.modifier != modifier || peek_cell.fg != fg || peek_cell.bg != bg
-                    {
+                    if peek_cell.modifier != modifier || peek_cell.fg != fg || peek_cell.bg != bg {
                         break;
                     }
                     run.push_str(peek_cell.symbol());

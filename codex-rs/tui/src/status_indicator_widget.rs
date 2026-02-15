@@ -24,6 +24,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::exec_cell::spinner;
 use crate::key_hint;
 use crate::render::renderable::Renderable;
+use crate::shimmer::next_shimmer_frame_delay;
 use crate::shimmer::shimmer_spans;
 use crate::text_formatting::capitalize_first;
 use crate::tui::FrameRequester;
@@ -68,6 +69,31 @@ pub fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
 }
 
 impl StatusIndicatorWidget {
+    fn schedule_next_frame(&self, elapsed_duration: Duration) {
+        let mut next_delay: Option<Duration> = None;
+
+        if self.animations_enabled {
+            if let Some(delay) = next_shimmer_frame_delay("•") {
+                next_delay = Some(next_delay.map_or(delay, |current| current.min(delay)));
+            }
+            if let Some(delay) = next_shimmer_frame_delay(&self.header) {
+                next_delay = Some(next_delay.map_or(delay, |current| current.min(delay)));
+            }
+        }
+
+        if !self.is_paused {
+            let elapsed_subsec = Duration::from_nanos(u64::from(elapsed_duration.subsec_nanos()));
+            let elapsed_tick_delay = Duration::from_secs(1).saturating_sub(elapsed_subsec);
+            next_delay = Some(next_delay.map_or(elapsed_tick_delay, |current| {
+                current.min(elapsed_tick_delay)
+            }));
+        }
+
+        if let Some(delay) = next_delay {
+            self.frame_requester.schedule_frame_in(delay);
+        }
+    }
+
     pub(crate) fn new(
         app_event_tx: AppEventSender,
         frame_requester: FrameRequester,
@@ -218,11 +244,9 @@ impl Renderable for StatusIndicatorWidget {
             return;
         }
 
-        // Schedule next animation frame.
-        self.frame_requester
-            .schedule_frame_in(Duration::from_millis(32));
         let now = Instant::now();
         let elapsed_duration = self.elapsed_duration_at(now);
+        self.schedule_next_frame(elapsed_duration);
         let pretty_elapsed = fmt_elapsed_compact(elapsed_duration.as_secs());
 
         let mut spans = Vec::with_capacity(5);
