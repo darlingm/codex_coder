@@ -505,22 +505,23 @@ fn draw<I>(writer: &mut impl Write, commands: I) -> io::Result<()>
 where
     I: Iterator<Item = DrawCommand>,
 {
+    fn symbol_width_u16(symbol: &str) -> u16 {
+        let width = symbol.width().max(1);
+        width.min(u16::MAX as usize) as u16
+    }
+
     let mut fg = Color::Reset;
     let mut bg = Color::Reset;
     let mut modifier = Modifier::empty();
-    let mut last_pos: Option<Position> = None;
-    for command in commands {
-        let (x, y) = match command {
-            DrawCommand::Put { x, y, .. } => (x, y),
-            DrawCommand::ClearToEnd { x, y, .. } => (x, y),
-        };
-        // Move the cursor if the previous location was not (x - 1, y)
-        if !matches!(last_pos, Some(p) if x == p.x + 1 && y == p.y) {
-            queue!(writer, MoveTo(x, y))?;
-        }
-        last_pos = Some(Position { x, y });
+    let mut cursor_pos: Option<Position> = None;
+    let mut commands = commands.peekable();
+
+    while let Some(command) = commands.next() {
         match command {
-            DrawCommand::Put { cell, .. } => {
+            DrawCommand::Put { x, y, cell } => {
+                if !matches!(cursor_pos, Some(p) if p.x == x && p.y == y) {
+                    queue!(writer, MoveTo(x, y))?;
+                }
                 if cell.modifier != modifier {
                     let diff = ModifierDiff {
                         from: modifier,
@@ -538,14 +539,44 @@ where
                     bg = cell.bg;
                 }
 
-                queue!(writer, Print(cell.symbol()))?;
+                let mut run = cell.symbol().to_string();
+                let mut next_x = x.saturating_add(symbol_width_u16(cell.symbol()));
+
+                while let Some(DrawCommand::Put {
+                    x: peek_x,
+                    y: peek_y,
+                    cell: peek_cell,
+                }) = commands.peek()
+                {
+                    if *peek_y != y || *peek_x != next_x {
+                        break;
+                    }
+                    if peek_cell.modifier != modifier || peek_cell.fg != fg || peek_cell.bg != bg
+                    {
+                        break;
+                    }
+                    run.push_str(peek_cell.symbol());
+                    next_x = next_x.saturating_add(symbol_width_u16(peek_cell.symbol()));
+                    commands.next();
+                }
+
+                queue!(writer, Print(run))?;
+                cursor_pos = Some(Position { x: next_x, y });
             }
-            DrawCommand::ClearToEnd { bg: clear_bg, .. } => {
-                queue!(writer, SetAttribute(crossterm::style::Attribute::Reset))?;
-                modifier = Modifier::empty();
-                queue!(writer, SetBackgroundColor(clear_bg.into()))?;
-                bg = clear_bg;
+            DrawCommand::ClearToEnd { x, y, bg: clear_bg } => {
+                if !matches!(cursor_pos, Some(p) if p.x == x && p.y == y) {
+                    queue!(writer, MoveTo(x, y))?;
+                }
+                if modifier != Modifier::empty() {
+                    queue!(writer, SetAttribute(crossterm::style::Attribute::Reset))?;
+                    modifier = Modifier::empty();
+                }
+                if bg != clear_bg {
+                    queue!(writer, SetBackgroundColor(clear_bg.into()))?;
+                    bg = clear_bg;
+                }
                 queue!(writer, Clear(crossterm::terminal::ClearType::UntilNewLine))?;
+                cursor_pos = Some(Position { x, y });
             }
         }
     }
