@@ -426,31 +426,44 @@ fn diff_buffers(a: &Buffer, b: &Buffer) -> Vec<DrawCommand> {
 
     let mut updates = vec![];
     let mut last_nonblank_columns = vec![0; a.area.height as usize];
-    for y in 0..a.area.height {
-        let row_start = y as usize * a.area.width as usize;
-        let row_end = row_start + a.area.width as usize;
-        let row = &next_buffer[row_start..row_end];
-        let bg = row.last().map(|cell| cell.bg).unwrap_or(Color::Reset);
 
-        // Scan the row to find the rightmost column that still matters: any non-space glyph,
-        // any cell whose bg differs from the row’s trailing bg, or any cell with modifiers.
-        // Multi-width glyphs extend that region through their full displayed width.
-        // After that point the rest of the row can be cleared with a single ClearToEnd, a perf win
-        // versus emitting multiple space Put commands.
+    let row_stats = |row: &[Cell]| {
+        let trailing_bg = row.last().map(|cell| cell.bg).unwrap_or(Color::Reset);
         let mut last_nonblank_column = 0usize;
         let mut column = 0usize;
         while column < row.len() {
             let cell = &row[column];
             let width = cell.symbol().width();
-            if cell.symbol() != " " || cell.bg != bg || cell.modifier != Modifier::empty() {
+            if cell.symbol() != " " || cell.bg != trailing_bg || cell.modifier != Modifier::empty()
+            {
                 last_nonblank_column = column + (width.saturating_sub(1));
             }
             column += width.max(1); // treat zero-width symbols as width 1
         }
+        (last_nonblank_column, trailing_bg)
+    };
 
-        if last_nonblank_column + 1 < row.len() {
+    for y in 0..a.area.height {
+        let row_start = y as usize * a.area.width as usize;
+        let row_end = row_start + a.area.width as usize;
+        let next_row = &next_buffer[row_start..row_end];
+        let previous_row = &previous_buffer[row_start..row_end];
+        let (last_nonblank_column, trailing_bg) = row_stats(next_row);
+        let (prev_last_nonblank_column, prev_trailing_bg) = row_stats(previous_row);
+
+        // Clear the trailing segment only when needed. Avoid emitting per-row ClearToEnd on every
+        // frame when rows are unchanged, which can dominate terminal byte throughput during
+        // animations.
+        let needs_clear_to_end = last_nonblank_column + 1 < next_row.len()
+            && (prev_last_nonblank_column > last_nonblank_column
+                || prev_trailing_bg != trailing_bg);
+        if needs_clear_to_end {
             let (x, y) = a.pos_of(row_start + last_nonblank_column + 1);
-            updates.push(DrawCommand::ClearToEnd { x, y, bg });
+            updates.push(DrawCommand::ClearToEnd {
+                x,
+                y,
+                bg: trailing_bg,
+            });
         }
 
         last_nonblank_columns[y as usize] = last_nonblank_column as u16;
@@ -658,6 +671,49 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
             "expected clear-to-end to start after the remaining wide char; commands: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn diff_buffers_does_not_emit_clear_to_end_for_identical_rows() {
+        let area = Rect::new(0, 0, 10, 3);
+        let previous = Buffer::empty(area);
+        let next = Buffer::empty(area);
+
+        let commands = diff_buffers(&previous, &next);
+        assert_eq!(
+            0,
+            commands
+                .iter()
+                .filter(|command| matches!(command, DrawCommand::ClearToEnd { .. }))
+                .count(),
+            "expected no ClearToEnd commands for identical buffers; commands: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn diff_buffers_only_clears_rows_with_shrinking_content() {
+        let area = Rect::new(0, 0, 8, 2);
+        let mut previous = Buffer::empty(area);
+        let mut next = Buffer::empty(area);
+
+        previous.set_string(0, 0, "abcdef", Style::default());
+        next.set_string(0, 0, "ab", Style::default());
+        previous.set_string(0, 1, "same", Style::default());
+        next.set_string(0, 1, "same", Style::default());
+
+        let commands = diff_buffers(&previous, &next);
+        assert!(
+            commands
+                .iter()
+                .any(|command| matches!(command, DrawCommand::ClearToEnd { y: 0, .. })),
+            "expected clear on changed row with shrinking content; commands: {commands:?}"
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, DrawCommand::ClearToEnd { y: 1, .. })),
+            "unexpected clear on unchanged row; commands: {commands:?}"
         );
     }
 }
