@@ -345,15 +345,19 @@ where
 
     /// Hides the cursor.
     pub fn hide_cursor(&mut self) -> io::Result<()> {
-        self.backend.hide_cursor()?;
-        self.hidden_cursor = true;
+        if !self.hidden_cursor {
+            self.backend.hide_cursor()?;
+            self.hidden_cursor = true;
+        }
         Ok(())
     }
 
     /// Shows the cursor.
     pub fn show_cursor(&mut self) -> io::Result<()> {
-        self.backend.show_cursor()?;
-        self.hidden_cursor = false;
+        if self.hidden_cursor {
+            self.backend.show_cursor()?;
+            self.hidden_cursor = false;
+        }
         Ok(())
     }
 
@@ -368,8 +372,10 @@ where
     /// Sets the cursor position.
     pub fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
         let position = position.into();
-        self.backend.set_cursor_position(position)?;
-        self.last_known_cursor_pos = position;
+        if position != self.last_known_cursor_pos {
+            self.backend.set_cursor_position(position)?;
+            self.last_known_cursor_pos = position;
+        }
         Ok(())
     }
 
@@ -544,12 +550,14 @@ where
         }
     }
 
-    queue!(
-        writer,
-        SetForegroundColor(crossterm::style::Color::Reset),
-        SetBackgroundColor(crossterm::style::Color::Reset),
-        SetAttribute(crossterm::style::Attribute::Reset),
-    )?;
+    if fg != Color::Reset || bg != Color::Reset || modifier != Modifier::empty() {
+        queue!(
+            writer,
+            SetForegroundColor(crossterm::style::Color::Reset),
+            SetBackgroundColor(crossterm::style::Color::Reset),
+            SetAttribute(crossterm::style::Attribute::Reset),
+        )?;
+    }
 
     Ok(())
 }
